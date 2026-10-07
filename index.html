@@ -1,0 +1,227 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>3D CAR DRIVE - MOBILE</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <style>
+        body { margin: 0; overflow: hidden; font-family: sans-serif; background: #000; touch-action: none; }
+        #ui-layer { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; z-index: 10; }
+        .menu { pointer-events: auto; background: rgba(0,0,0,0.8); display: flex; flex-direction: column; justify-content: center; align-items: center; color: white; position: absolute; width: 100%; height: 100%; }
+        .hidden { display: none !important; }
+        button { pointer-events: auto; padding: 15px 40px; font-size: 1.2rem; margin: 10px; border: none; border-radius: 10px; cursor: pointer; background: #ff0055; color: white; font-weight: bold; }
+        #hud { position: absolute; top: 10px; left: 10px; right: 10px; color: white; display: flex; justify-content: space-between; font-size: 14px; text-shadow: 1px 1px 2px black; }
+        #controls { position: absolute; bottom: 20px; width: 100%; display: flex; justify-content: space-around; pointer-events: auto; }
+        .ctrl-group { display: flex; flex-direction: column; gap: 10px; }
+        .btn { width: 70px; height: 70px; background: rgba(255,255,255,0.2); border: 2px solid white; border-radius: 50%; color: white; display: flex; align-items: center; justify-content: center; font-weight: bold; -webkit-user-select: none; }
+        .btn:active { background: rgba(255,255,255,0.5); }
+        .green { background: rgba(0, 255, 0, 0.3); }
+        .red { background: rgba(255, 0, 0, 0.3); }
+    </style>
+</head>
+<body>
+
+<div id="ui-layer">
+    <!-- Start Menu -->
+    <div id="start-menu" class="menu">
+        <h1>3D CAR DRIVE</h1>
+        <button onclick="startGame()">PLAY GAME</button>
+        <p>Avoid obstacles & Collect coins!</p>
+    </div>
+
+    <!-- HUD -->
+    <div id="hud" class="hidden">
+        <div>SCORE: <span id="score">0</span><br>HEALTH: <span id="health">3</span></div>
+        <div style="text-align:right">SPEED: <span id="speed">0</span> km/h<br>DIST: <span id="dist">0</span>m</div>
+    </div>
+
+    <!-- Mobile Controls -->
+    <div id="controls" class="hidden">
+        <div class="ctrl-group">
+            <div class="btn" id="leftBtn">LEFT</div>
+            <div class="btn" id="rightBtn">RIGHT</div>
+        </div>
+        <div class="ctrl-group">
+            <div class="btn green" id="gasBtn">GAS</div>
+            <div class="btn red" id="brakeBtn">BRAKE</div>
+        </div>
+    </div>
+
+    <!-- Game Over -->
+    <div id="game-over" class="menu hidden">
+        <h1>GAME OVER</h1>
+        <p id="final-stats"></p>
+        <button onclick="location.reload()">PLAY AGAIN</button>
+    </div>
+</div>
+
+<script>
+let scene, camera, renderer, car, clock;
+let roadSegments = [], obstacles = [], coins = [];
+let score = 0, health = 3, distance = 0, speed = 0;
+let gameActive = false;
+let move = { left: false, right: false, gas: false, brake: false };
+
+function init() {
+    scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x87ceeb);
+    scene.fog = new THREE.Fog(0x87ceeb, 20, 100);
+
+    camera = new THREE.PerspectiveCamera(75, window.innerWidth/window.innerHeight, 0.1, 1000);
+    renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.setPixelRatio(window.devicePixelRatio);
+    document.body.appendChild(renderer.domElement);
+
+    const ambientLight = new THREE.AmbientLight(0xffffff, 0.7);
+    scene.add(ambientLight);
+    const sunLight = new THREE.DirectionalLight(0xffffff, 0.8);
+    sunLight.position.set(5, 10, 7);
+    scene.add(sunLight);
+
+    createCar();
+    for(let i=0; i<5; i++) createRoad(i * 40);
+
+    clock = new THREE.Clock();
+    setupMobileControls();
+    animate();
+}
+
+function createCar() {
+    car = new THREE.Group();
+    const body = new THREE.Mesh(new THREE.BoxGeometry(1.2, 0.5, 2.2), new THREE.MeshPhongMaterial({color: 0xff0000}));
+    body.position.y = 0.5;
+    car.add(body);
+
+    const glass = new THREE.Mesh(new THREE.BoxGeometry(1, 0.4, 1), new THREE.MeshPhongMaterial({color: 0x333333}));
+    glass.position.set(0, 0.8, -0.2);
+    car.add(glass);
+
+    scene.add(car);
+}
+
+function createRoad(z) {
+    const roadGroup = new THREE.Group();
+    const roadGeo = new THREE.PlaneGeometry(10, 40);
+    const roadMat = new THREE.MeshPhongMaterial({color: 0x333333});
+    const road = new THREE.Mesh(roadGeo, roadMat);
+    road.rotation.x = -Math.PI/2;
+    road.position.z = -z;
+    roadGroup.add(road);
+
+    // Grass
+    const grassGeo = new THREE.PlaneGeometry(100, 40);
+    const grassMat = new THREE.MeshPhongMaterial({color: 0x2d5a27});
+    const grass = new THREE.Mesh(grassGeo, grassMat);
+    grass.rotation.x = -Math.PI/2;
+    grass.position.y = -0.05;
+    grass.position.z = -z;
+    roadGroup.add(grass);
+
+    // Add obstacles & coins
+    if(z > 20) {
+        if(Math.random() > 0.6) {
+            const obs = new THREE.Mesh(new THREE.BoxGeometry(1.5, 1, 1.5), new THREE.MeshPhongMaterial({color: 0xffaa00}));
+            obs.position.set((Math.random()-0.5)*7, 0.5, -z - (Math.random()*20));
+            scene.add(obs);
+            obstacles.push(obs);
+        }
+        const coin = new THREE.Mesh(new THREE.CylinderGeometry(0.4, 0.4, 0.1), new THREE.MeshPhongMaterial({color: 0xffd700}));
+        coin.rotation.x = Math.PI/2;
+        coin.position.set((Math.random()-0.5)*7, 0.7, -z - (Math.random()*20));
+        scene.add(coin);
+        coins.push(coin);
+    }
+
+    scene.add(roadGroup);
+    roadSegments.push({mesh: roadGroup, z: z});
+}
+
+function setupMobileControls() {
+    const setTouch = (id, prop) => {
+        const el = document.getElementById(id);
+        el.addEventListener('touchstart', (e) => { e.preventDefault(); move[prop] = true; });
+        el.addEventListener('touchend', (e) => { e.preventDefault(); move[prop] = false; });
+    };
+    setTouch('leftBtn', 'left'); setTouch('rightBtn', 'right');
+    setTouch('gasBtn', 'gas'); setTouch('brakeBtn', 'brake');
+}
+
+function startGame() {
+    document.getElementById('start-menu').classList.add('hidden');
+    document.getElementById('hud').classList.remove('hidden');
+    document.getElementById('controls').classList.remove('hidden');
+    gameActive = true;
+}
+
+function animate() {
+    requestAnimationFrame(animate);
+    let dt = clock.getDelta();
+
+    if(gameActive) {
+        if(move.gas) speed += 0.01;
+        if(move.brake) speed -= 0.02;
+        speed *= 0.98; // friction
+        if(speed < 0) speed = 0;
+        if(speed > 0.7) speed = 0.7;
+
+        car.position.z -= speed * 100 * dt;
+        if(move.left && car.position.x > -4) car.position.x -= 0.1;
+        if(move.right && car.position.x < 4) car.position.x += 0.1;
+
+        distance = Math.floor(Math.abs(car.position.z));
+        
+        // Update HUD
+        document.getElementById('score').innerText = score;
+        document.getElementById('health').innerText = health;
+        document.getElementById('speed').innerText = Math.floor(speed * 200);
+        document.getElementById('dist').innerText = distance;
+
+        camera.position.set(car.position.x, car.position.y + 3, car.position.z + 6);
+        camera.lookAt(car.position.x, 1, car.position.z - 5);
+
+        // Infinite road logic
+        roadSegments.forEach(seg => {
+            if(car.position.z < -seg.z - 40) {
+                seg.z += 200;
+                seg.mesh.position.z = -seg.z + (seg.z - (seg.z % 40)); 
+            }
+        });
+
+        // Collisions
+        obstacles.forEach((obj, i) => {
+            if(car.position.distanceTo(obj.position) < 1.5) {
+                health--;
+                scene.remove(obj);
+                obstacles.splice(i, 1);
+                if(health <= 0) {
+                    gameActive = false;
+                    document.getElementById('game-over').classList.remove('hidden');
+                    document.getElementById('final-stats').innerText = `Score: ${score} | Distance: ${distance}m`;
+                }
+            }
+        });
+
+        coins.forEach((obj, i) => {
+            obj.rotation.y += 0.1;
+            if(car.position.distanceTo(obj.position) < 1.2) {
+                score += 10;
+                scene.remove(obj);
+                coins.splice(i, 1);
+            }
+        });
+    }
+    renderer.render(scene, camera);
+}
+
+window.addEventListener('resize', () => {
+    camera.aspect = window.innerWidth / window.innerHeight;
+    camera.updateProjectionMatrix();
+    renderer.setSize(window.innerWidth, window.innerHeight);
+});
+
+init();
+</script>
+</body>
+</html>
